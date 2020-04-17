@@ -22,6 +22,11 @@ us write code with fewer errors, lets bring them to the interface between elm an
 
 
 
+## Installation
+`npm install --save-dev elm-port-schema`
+
+
+
 ## How it works
 
 __NOTE__: We will use typescript instead of javascript. Typescript is essentially javascript
