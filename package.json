@@ -7,7 +7,7 @@
     "build:dev": "webpack --mode=development --watch"
   },
   "author": "Hugo Bastås",
-  "license": "mit",
+  "license": "MIT",
   "devDependencies": {
     "@types/cross-spawn": "^6.0.1",
     "@types/node": "^13.9.5",
