@@ -6,6 +6,7 @@
     "build": "webpack --mode=none",
     "build:dev": "webpack --mode=development --watch"
   },
+  "repository": "https://github.com/hugobastas/elm-port-schema",
   "author": "Hugo Bastås",
   "license": "MIT",
   "devDependencies": {
