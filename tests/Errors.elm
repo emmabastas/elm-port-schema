@@ -33,21 +33,11 @@ badModuleName : Test
 badModuleName =
     test "Should not accept a module name that is not Schema" <|
         \_ ->
-            let
-                fooModule =
-                    """module Foo exposing (..)
+            """module Foo exposing (..)
 type alias FromElmMessage = ()
 type alias ToElmMessage = ()"""
-            in
-            case parseSchema fooModule of
-                Err (Main.ParseSchemaError _) ->
-                    Expect.pass
-
-                x ->
-                    Expect.fail
-                        ("Should be parse error. Is:\n"
-                            ++ Debug.toString x
-                        )
+                |> parseSchema
+                |> Expect.equal (Err (Main.NotNamedSchema [ "Foo" ]))
 
 
 portModule : Test
