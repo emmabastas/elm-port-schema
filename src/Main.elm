@@ -13,6 +13,7 @@ import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Exposing
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module as Module
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import GenerateElm exposing (generateElm)
@@ -71,7 +72,7 @@ type alias Response =
 type Error
     = DecodeRequestError Decode.Error
     | ParseSchemaError (List Parser.DeadEnd)
-    | NotNamedSchema
+    | NotNamedSchema ModuleName
     | IsPortModule
     | IsEffectModule
     | DoesNotExposeAll
@@ -98,7 +99,14 @@ parseElm schema =
 
 schemaFromElm : File -> Result Error Schema
 schemaFromElm file =
-    if Module.isPortModule (Node.value file.moduleDefinition) then
+    let
+        moduleName =
+            Module.moduleName (Node.value file.moduleDefinition)
+    in
+    if moduleName /= [ "Schema" ] then
+        Err (NotNamedSchema moduleName)
+
+    else if Module.isPortModule (Node.value file.moduleDefinition) then
         Err IsPortModule
 
     else if Module.isEffectModule (Node.value file.moduleDefinition) then
@@ -333,6 +341,11 @@ Well this is embarasing. Something has gone wrong but i don't know why.. This is
 Im got stuck parsing your schema. unfortunatley im not sophisticated enough to produce i nice error message, but here is my best atempt:
 {{ error }}"""
                 |> namedValue "error" (Parser.deadEndsToString deadEnds)
+
+        NotNamedSchema currentName ->
+            """---Error: module must be named schema!---
+Your schema must be named "Schema", it is currently named {{ currentName }}"""
+                |> namedValue "currentName" (String.join "." currentName)
 
         IsPortModule ->
             """---Error: schema is port module!---
