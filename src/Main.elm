@@ -1,4 +1,11 @@
-port module Main exposing (main)
+port module Main exposing
+    ( BadDeclarationError(..)
+    , Error(..)
+    , errorToString
+    , main
+    , parseElm
+    , schemaFromElm
+    )
 
 import Elm.Parser
 import Elm.Processing
