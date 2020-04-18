@@ -12,11 +12,11 @@ import Elm.Processing
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Exposing
 import Elm.Syntax.File exposing (File)
-import Elm.Syntax.Module exposing (exposingList, isEffectModule, isPortModule)
+import Elm.Syntax.Module as Module
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
-import GenerateElm
-import GenerateTypeScript
+import GenerateElm exposing (generateElm)
+import GenerateTypeScript exposing (generateTypeScript)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Parser
@@ -40,23 +40,21 @@ main =
 
 handleRequest : Decode.Value -> Encode.Value
 handleRequest unDecodedRequest =
-    decodeRequest unDecodedRequest
-        |> Result.andThen
-            (\request ->
-                parseElm request.schemaContents
-                    |> Result.andThen schemaFromElm
-                    |> Result.map
-                        (\schema ->
-                            { generatedElm =
-                                GenerateElm.generateElm
-                                    request.elmModule
-                                    schema
-                            , generatedTypescript =
-                                GenerateTypeScript.generateTypeScript schema
-                            }
-                        )
-            )
-        |> encodeResponse
+    case decodeRequest unDecodedRequest of
+        Ok request ->
+            request.schemaContents
+                |> parseElm
+                |> Result.andThen schemaFromElm
+                |> Result.map
+                    (\schema ->
+                        { generatedElm = generateElm request.elmModule schema
+                        , generatedTypescript = generateTypeScript schema
+                        }
+                    )
+                |> encodeResponse
+
+        Err err ->
+            encodeResponse (Err err)
 
 
 type alias Request =
@@ -75,13 +73,14 @@ type alias Response =
 type Error
     = DecodeRequestError Decode.Error
     | ParseSchemaError (List Parser.DeadEnd)
+    | NotNamedSchema
     | IsPortModule
     | IsEffectModule
     | DoesNotExposeAll
     | ContainsImports
-    | ContainsBadDeclarations (List BadDeclarationError)
     | MissingFromElmMessageDeclaration
     | MissingToElmMessageDeclaration
+    | ContainsBadDeclarations (List BadDeclarationError)
 
 
 type BadDeclarationError
@@ -101,10 +100,10 @@ parseElm schema =
 
 schemaFromElm : File -> Result Error Schema
 schemaFromElm file =
-    if isPortModule (Node.value file.moduleDefinition) then
+    if Module.isPortModule (Node.value file.moduleDefinition) then
         Err IsPortModule
 
-    else if isEffectModule (Node.value file.moduleDefinition) then
+    else if Module.isEffectModule (Node.value file.moduleDefinition) then
         Err IsEffectModule
 
     else if not (exposesAll file) then
@@ -146,7 +145,7 @@ schemaFromElm file =
 
 exposesAll : File -> Bool
 exposesAll file =
-    case Elm.Syntax.Module.exposingList (Node.value file.moduleDefinition) of
+    case Module.exposingList (Node.value file.moduleDefinition) of
         Elm.Syntax.Exposing.All _ ->
             True
 
