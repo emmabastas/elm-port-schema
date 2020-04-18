@@ -1,20 +1,21 @@
 port module Main exposing
     ( BadDeclarationError(..)
     , Error(..)
+    , SchemaFromElmError(..)
     , errorToString
     , main
-    , parseElm
     , schemaFromElm
     )
 
+import Elm.Interface as Interface exposing (Interface)
 import Elm.Parser
 import Elm.Processing
+import Elm.RawFile exposing (RawFile)
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Exposing
-import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module as Module
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node(..))
+import Elm.Syntax.Range as Range exposing (Location, Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import GenerateElm exposing (generateElm)
 import GenerateTypeScript exposing (generateTypeScript)
@@ -44,8 +45,14 @@ handleRequest unDecodedRequest =
     case decodeRequest unDecodedRequest of
         Ok request ->
             request.schemaContents
-                |> parseElm
-                |> Result.andThen schemaFromElm
+                |> Elm.Parser.parse
+                |> Result.mapError ParseElm
+                |> Result.andThen
+                    (\ast ->
+                        schemaFromElm ast
+                            |> Result.mapError
+                                (SchemaFromElm request.schemaContents)
+                    )
                 |> Result.map
                     (\schema ->
                         { generatedElm = generateElm schema
@@ -70,100 +77,150 @@ type alias Response =
 
 
 type Error
-    = DecodeRequestError Decode.Error
-    | ParseSchemaError (List Parser.DeadEnd)
-    | NotNamedSchema ModuleName
-    | IsPortModule
-    | IsEffectModule
-    | DoesNotExposeAll
-    | ContainsImports
+    = DecodeRequest Decode.Error
+    | ParseElm (List Parser.DeadEnd)
+    | SchemaFromElm String SchemaFromElmError
+
+
+type SchemaFromElmError
+    = NotCorrectModuleName Range
+    | IsPortModule Range
+    | IsEffectModule Range
+    | DoesNotExposeAll Range
+    | ContainsImports (List Range)
     | MissingFromElmMessageDeclaration
     | MissingToElmMessageDeclaration
-    | ContainsBadDeclarations (List BadDeclarationError)
+    | BadDeclarations (List BadDeclarationError)
 
 
 type BadDeclarationError
-    = IsValue
-    | IsParametric
-    | ContainsFunction
-    | ContainsInvalidReference
-    | ContainsInvalidTuple
+    = DeclarationIsValue Range
+    | TypeHasVariable Range
+    | DeclarationIsExstensibleRecord Range
+    | FunctionType Range
+    | InvalidReference Range
+    | InvalidTuple Range
 
 
-parseElm : String -> Result Error File
-parseElm schema =
-    Elm.Parser.parse schema
-        |> Result.mapError ParseSchemaError
-        |> Result.map (Elm.Processing.process Elm.Processing.init)
-
-
-schemaFromElm : File -> Result Error Schema
-schemaFromElm file =
+schemaFromElm : RawFile -> Result SchemaFromElmError Schema
+schemaFromElm rawFile =
     let
-        moduleName =
-            Module.moduleName (Node.value file.moduleDefinition)
+        file =
+            Elm.Processing.process Elm.Processing.init rawFile
+
+        interface =
+            Interface.build rawFile
+
+        (Node moduleRange module_) =
+            file.moduleDefinition
+
+        ( moduleName, moduleNameRange ) =
+            (case module_ of
+                Module.NormalModule data ->
+                    data.moduleName
+
+                Module.PortModule data ->
+                    data.moduleName
+
+                Module.EffectModule data ->
+                    data.moduleName
+            )
+                |> (\(Node range name) -> ( name, range ))
+
+        ( exposesAll, exposesRange ) =
+            case Module.exposingList (Node.value file.moduleDefinition) of
+                Elm.Syntax.Exposing.All range ->
+                    ( True, range )
+
+                Elm.Syntax.Exposing.Explicit exposings ->
+                    ( False, Range.combine (List.map Node.range exposings) )
+
+        declarationNames =
+            List.filterMap
+                (\(Node _ declaration) ->
+                    case declaration of
+                        Elm.Syntax.Declaration.FunctionDeclaration func ->
+                            func
+                                |> .declaration
+                                |> Node.value
+                                |> .name
+                                |> Node.value
+                                |> Just
+
+                        Elm.Syntax.Declaration.AliasDeclaration alias ->
+                            Node.value alias.name
+                                |> Just
+
+                        Elm.Syntax.Declaration.CustomTypeDeclaration customType ->
+                            Node.value customType.name
+                                |> Just
+
+                        _ ->
+                            Nothing
+                )
+                file.declarations
     in
     if moduleName /= [ "Schema" ] then
-        Err (NotNamedSchema moduleName)
+        Err (NotCorrectModuleName moduleNameRange)
 
     else if Module.isPortModule (Node.value file.moduleDefinition) then
-        Err IsPortModule
+        let
+            start =
+                moduleRange.start
+
+            end =
+                Location start.row (start.column + 4)
+        in
+        Err (IsPortModule (Range start end))
 
     else if Module.isEffectModule (Node.value file.moduleDefinition) then
-        Err IsEffectModule
+        let
+            start =
+                moduleRange.start
 
-    else if not (exposesAll file) then
-        Err DoesNotExposeAll
+            end =
+                Location start.row (start.column + 6)
+        in
+        Err (IsEffectModule (Range start end))
+
+    else if not exposesAll then
+        Err (DoesNotExposeAll exposesRange)
 
     else if List.length file.imports /= 0 then
-        Err ContainsImports
+        file.imports
+            |> List.map Node.range
+            |> ContainsImports
+            |> Err
+
+    else if List.all ((/=) "FromElmMessage") declarationNames then
+        Err MissingFromElmMessageDeclaration
+
+    else if List.all ((/=) "ToElmMessage") declarationNames then
+        Err MissingToElmMessageDeclaration
 
     else
         let
             ( schemaDeclarations, errors ) =
                 file.declarations
-                    |> List.map Node.value
-                    |> List.map schemaDeclarationFromElmDeclaration
+                    |> List.map (schemaDeclarationFromElmDeclaration interface)
                     |> Result.Extra.partition
-
-            hasFromElmMessage =
-                List.any
-                    ((==) "FromElmMessage" << Schema.declarationName)
-                    schemaDeclarations
-
-            hasToElmMessage =
-                List.any
-                    ((==) "ToElmMessage" << Schema.declarationName)
-                    schemaDeclarations
+                    |> Tuple.mapSecond List.concat
         in
         if List.length errors /= 0 then
-            Err (ContainsBadDeclarations errors)
-
-        else if not hasFromElmMessage then
-            Err MissingFromElmMessageDeclaration
-
-        else if not hasToElmMessage then
-            Err MissingToElmMessageDeclaration
+            Err (BadDeclarations errors)
 
         else
             Ok { declarations = schemaDeclarations }
 
 
-exposesAll : File -> Bool
-exposesAll file =
-    case Module.exposingList (Node.value file.moduleDefinition) of
-        Elm.Syntax.Exposing.All _ ->
-            True
-
-        Elm.Syntax.Exposing.Explicit _ ->
-            False
-
-
-schemaDeclarationFromElmDeclaration : Declaration -> Result BadDeclarationError Schema.Declaration
-schemaDeclarationFromElmDeclaration elmDeclaration =
-    case elmDeclaration of
+schemaDeclarationFromElmDeclaration :
+    Interface
+    -> Node Declaration
+    -> Result (List BadDeclarationError) Schema.Declaration
+schemaDeclarationFromElmDeclaration interface elmDeclaration =
+    case Node.value elmDeclaration of
         Elm.Syntax.Declaration.AliasDeclaration { name, typeAnnotation } ->
-            schemaTypeFromElmTypeAnnotation (Node.value typeAnnotation)
+            schemaTypeFromElmTypeAnnotation interface typeAnnotation
                 |> Result.map
                     (\schemaType ->
                         Schema.TypeAliasDeclaration
@@ -177,7 +234,7 @@ schemaDeclarationFromElmDeclaration elmDeclaration =
                 |> List.map
                     (\(Node _ { name, arguments }) ->
                         List.map
-                            (schemaTypeFromElmTypeAnnotation << Node.value)
+                            (schemaTypeFromElmTypeAnnotation interface)
                             arguments
                             |> Result.Extra.combine
                             |> Result.map
@@ -197,82 +254,117 @@ schemaDeclarationFromElmDeclaration elmDeclaration =
                     )
 
         _ ->
-            Err IsValue
+            Err [ DeclarationIsValue (Node.range elmDeclaration) ]
 
 
-schemaTypeFromElmTypeAnnotation : TypeAnnotation -> Result BadDeclarationError Schema.Type
-schemaTypeFromElmTypeAnnotation typeAnnotation =
+schemaTypeFromElmTypeAnnotation :
+    Interface
+    -> Node TypeAnnotation
+    -> Result (List BadDeclarationError) Schema.Type
+schemaTypeFromElmTypeAnnotation interface (Node range typeAnnotation) =
     case typeAnnotation of
         Elm.Syntax.TypeAnnotation.GenericType _ ->
-            Err IsParametric
+            Err [ TypeHasVariable range ]
 
         Elm.Syntax.TypeAnnotation.Unit ->
             Ok Schema.Unit
 
-        Elm.Syntax.TypeAnnotation.Typed (Node _ ( moduleName, typeName )) typeAnnotations ->
+        Elm.Syntax.TypeAnnotation.Typed name parameters ->
             let
-                typeParameters =
-                    List.map (schemaTypeFromElmTypeAnnotation << Node.value) typeAnnotations
+                (Node typeNameRange ( moduleName, typeName )) =
+                    name
+
+                parametersAsSchemaType =
+                    parameters
+                        |> List.map (schemaTypeFromElmTypeAnnotation interface)
                         |> Result.Extra.combine
+
+                refersToTypeInSchema =
+                    List.filterMap
+                        (\exposed ->
+                            case exposed of
+                                Interface.CustomType ( customTypeName, _ ) ->
+                                    Just customTypeName
+
+                                Interface.Alias aliasName ->
+                                    Just aliasName
+
+                                _ ->
+                                    Nothing
+                        )
+                        interface
+                        |> List.member typeName
             in
-            case ( moduleName, typeName, typeParameters ) of
-                ( [], "Bool", Ok [] ) ->
+            case
+                ( typeName :: moduleName
+                , refersToTypeInSchema
+                , parametersAsSchemaType
+                )
+            of
+                ( [ "Bool" ], _, Ok [] ) ->
                     Ok Schema.Bool
 
-                ( [], "Int", Ok [] ) ->
+                ( [ "Int" ], _, Ok [] ) ->
                     Ok Schema.Int
 
-                ( [], "Float", Ok [] ) ->
+                ( [ "Float" ], _, Ok [] ) ->
                     Ok Schema.Float
 
-                ( [], "Char", Ok [] ) ->
+                ( [ "Char" ], _, Ok [] ) ->
                     Ok Schema.Char
 
-                ( [], "String", Ok [] ) ->
+                ( [ "String" ], _, Ok [] ) ->
                     Ok Schema.String
 
-                ( [], "List", Ok [ t ] ) ->
+                ( [ "List" ], _, Ok [ t ] ) ->
                     Ok (Schema.List t)
 
-                ( [], "Maybe", Ok [ t ] ) ->
+                ( [ "Maybe" ], _, Ok [ t ] ) ->
                     Ok (Schema.Maybe t)
 
-                ( [], "Result", Ok [ t1, t2 ] ) ->
+                ( [ "Result" ], _, Ok [ t1, t2 ] ) ->
                     Ok (Schema.Result t1 t2)
 
-                ( [], s, Ok [] ) ->
-                    Ok (Schema.TypeRef s)
+                ( [ ref ], True, Ok [] ) ->
+                    Ok (Schema.TypeRef ref)
 
-                ( [], _, Err err ) ->
+                ( _, False, _ ) ->
+                    Err [ InvalidReference typeNameRange ]
+
+                ( _, True, Ok _ ) ->
+                    Err [ InvalidReference typeNameRange ]
+
+                ( _, True, Err err ) ->
                     Err err
-
-                _ ->
-                    Err ContainsInvalidReference
 
         Elm.Syntax.TypeAnnotation.Tupled typeAnnotations ->
             let
                 typeParameters =
-                    List.map (schemaTypeFromElmTypeAnnotation << Node.value) typeAnnotations
+                    List.map
+                        (schemaTypeFromElmTypeAnnotation interface)
+                        typeAnnotations
                         |> Result.Extra.combine
             in
             case typeParameters of
-                Err err ->
-                    Err err
-
                 Ok [ t1, t2 ] ->
                     Ok (Schema.Tuple t1 t2)
 
                 Ok [ t1, t2, t3 ] ->
                     Ok (Schema.Tuple3 t1 t2 t3)
 
-                _ ->
-                    Err ContainsInvalidTuple
+                Ok _ ->
+                    Err [ InvalidTuple range ]
+
+                Err err ->
+                    Err err
 
         Elm.Syntax.TypeAnnotation.Record recordFields ->
             recordFields
                 |> List.map
-                    (\(Node _ ( Node _ fieldName, Node _ fieldTypeAnnotation )) ->
-                        schemaTypeFromElmTypeAnnotation fieldTypeAnnotation
+                    (\(Node _ ( Node _ fieldName, fieldTypeAnnotation )) ->
+                        schemaTypeFromElmTypeAnnotation
+                            interface
+                            fieldTypeAnnotation
                             |> Result.map
                                 (\schemaType ->
                                     { name = fieldName
@@ -284,10 +376,10 @@ schemaTypeFromElmTypeAnnotation typeAnnotation =
                 |> Result.map Schema.Record
 
         Elm.Syntax.TypeAnnotation.GenericRecord _ _ ->
-            Err IsParametric
+            Err [ TypeHasVariable range ]
 
         Elm.Syntax.TypeAnnotation.FunctionTypeAnnotation _ _ ->
-            Err ContainsFunction
+            Err [ FunctionType range ]
 
 
 decodeRequest : Decode.Value -> Result Error Request
@@ -298,7 +390,7 @@ decodeRequest value =
                 (Decode.field "schemaContents" Decode.string)
     in
     Decode.decodeValue decoder value
-        |> Result.mapError DecodeRequestError
+        |> Result.mapError DecodeRequest
 
 
 encodeResponse : Response -> Encode.Value
@@ -330,40 +422,39 @@ encodeResponse response =
 errorToString : Error -> String
 errorToString err =
     case err of
-        DecodeRequestError decodeError ->
+        DecodeRequest decodeError ->
             """---Unknown Error!---
 Well this is embarasing. Something has gone wrong but i don't know why.. This is probably a bug. Full error message:
 {{ error }}"""
                 |> namedValue "error" (Decode.errorToString decodeError)
 
-        ParseSchemaError deadEnds ->
+        ParseElm deadEnds ->
             """---Parse schema error!---
 Im got stuck parsing your schema. unfortunatley im not sophisticated enough to produce i nice error message, but here is my best atempt:
 {{ error }}"""
                 |> namedValue "error" (Parser.deadEndsToString deadEnds)
 
-        NotNamedSchema currentName ->
+        SchemaFromElm _ (NotCorrectModuleName _) ->
             """---Error: module must be named schema!---
-Your schema must be named "Schema", it is currently named {{ currentName }}"""
-                |> namedValue "currentName" (String.join "." currentName)
+Your schema must be named "Schema", it is currently named something else"""
 
-        IsPortModule ->
+        SchemaFromElm _ (IsPortModule _) ->
             """---Error: schema is port module!---
 your schema is as a port module, i will automatically generate ports for you so there is no need to place any in your scmema. The first line of your schema should be this: "module Schema expoisng (..)\""""
 
-        IsEffectModule ->
+        SchemaFromElm _ (IsEffectModule _) ->
             """---Error: schema is effect module!---
 Hey you! Stop that!"""
 
-        DoesNotExposeAll ->
+        SchemaFromElm _ (DoesNotExposeAll _) ->
             """---Error: module does not expose all---
 Maybe this is a bit strict on my part but you should expose everyting in your schema, i.e. the first line of your schema should be "module Schema exposing(..)\""""
 
-        ContainsImports ->
+        SchemaFromElm _ (ContainsImports _) ->
             """---Error: contains imports---
 Your module contains import. Unfortunately i can't handle this (but maybe in the future??). You will have to remove all imports."""
 
-        ContainsBadDeclarations _ ->
+        SchemaFromElm _ (BadDeclarations _) ->
             """---Error: bad declarations---
 You have used some declarations in your schema that i don't know how to deal with. You can't have anything that:
 is a value. E.g "myValue = 1"
@@ -373,12 +464,110 @@ has type variables in them. E.g type MyParametricType a = Foo a
 The only types you are alowed to reference are those defined by you in your schema and thes ones: (), Bool, Int, Float, Char, String, List, Maybe and Result.
 """
 
-        MissingFromElmMessageDeclaration ->
+        SchemaFromElm _ MissingFromElmMessageDeclaration ->
             """---Error: missing FromElmMessage---
 I can't find a FromElmMessage type in your schema, maybe you misspelled it?
 I always need a FromElmMessage type to be declared even if you wont use it. In that case just declare it as "type alias FromElmMessage = ()\""""
 
-        MissingToElmMessageDeclaration ->
+        SchemaFromElm _ MissingToElmMessageDeclaration ->
             """---Error: missing ToElmMessage---
 I can't find a ToElmMessage type in your schema, maybe you misspelled it?
 I always need a ToElmMessage type to be declared even if you wont use it. In that case just declare it as "type alias ToElmMessage = ()\""""
+
+
+genericErrorMessage :
+    { title : String
+    , reason : String
+    , offendingCode :
+        Maybe
+            { code : String
+            , errorLocation : Range
+            , fix : String
+            }
+    }
+    -> String
+genericErrorMessage { title, reason, offendingCode } =
+    "-- "
+        ++ String.padRight 30 '-' (title ++ " ")
+        ++ " src/Schema.elm"
+        ++ "\n\n"
+        ++ reason
+        ++ (case offendingCode of
+                Nothing ->
+                    ""
+
+                Just { code, errorLocation, fix } ->
+                    "\n\n"
+                        ++ offendingCodeSnippet code errorLocation
+                        ++ "\n\n"
+                        ++ fix
+           )
+
+
+offendingCodeSnippet : String -> Range -> String
+offendingCodeSnippet code range =
+    let
+        sr =
+            range.start.row
+
+        sc =
+            range.start.column
+
+        er =
+            range.end.row
+
+        ec =
+            range.end.column
+
+        relevantLines =
+            code
+                |> String.lines
+                |> List.drop (sr - 1)
+                |> List.take (er - sr + 1)
+
+        errorMarkings =
+            relevantLines
+                |> List.indexedMap
+                    (\i line ->
+                        line
+                            |> String.toList
+                            |> List.indexedMap
+                                (\j _ ->
+                                    if sr == er then
+                                        if j + 1 >= sc && j + 1 < ec then
+                                            '^'
+
+                                        else
+                                            ' '
+
+                                    else if i == 0 && sc <= j + 1 then
+                                        '^'
+
+                                    else if i == (er - sc) && ec >= j + 1 then
+                                        '^'
+
+                                    else if i > 0 && i <= (er - sr) then
+                                        '^'
+
+                                    else
+                                        ' '
+                                )
+                            |> String.fromList
+                            |> String.trimRight
+                    )
+    in
+    List.map3
+        (\lineNmber line errorMarking ->
+            let
+                foo =
+                    String.length (String.fromInt er)
+            in
+            [ String.padRight foo ' ' (String.fromInt lineNmber) ++ "| " ++ line
+            , String.repeat (foo + 2) " " ++ errorMarking
+            ]
+        )
+        (List.indexedMap (\i _ -> i + sr) relevantLines)
+        relevantLines
+        errorMarkings
+        |> List.concat
+        |> String.join "\n"
