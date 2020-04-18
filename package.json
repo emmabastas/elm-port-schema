@@ -4,7 +4,8 @@
   "description": "Bring type-safety to the border between js and elm.",
   "scripts": {
     "build": "webpack --mode=none",
-    "build:dev": "webpack --mode=development --watch"
+    "build:dev": "webpack --mode=development --watch",
+    "test": "elm-test"
   },
   "repository": "https://github.com/hugobastas/elm-port-schema",
   "keywords": [
