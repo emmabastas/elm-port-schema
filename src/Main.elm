@@ -47,7 +47,7 @@ handleRequest unDecodedRequest =
                 |> Result.andThen schemaFromElm
                 |> Result.map
                     (\schema ->
-                        { generatedElm = generateElm request.elmModule schema
+                        { generatedElm = generateElm schema
                         , generatedTypescript = generateTypeScript schema
                         }
                     )
@@ -58,9 +58,7 @@ handleRequest unDecodedRequest =
 
 
 type alias Request =
-    { schemaContents : String
-    , elmModule : String
-    }
+    { schemaContents : String }
 
 
 type alias Response =
@@ -288,9 +286,8 @@ decodeRequest : Decode.Value -> Result Error Request
 decodeRequest value =
     let
         decoder =
-            Decode.map2 Request
+            Decode.map Request
                 (Decode.field "schemaContents" Decode.string)
-                (Decode.field "elmModule" Decode.string)
     in
     Decode.decodeValue decoder value
         |> Result.mapError DecodeRequestError

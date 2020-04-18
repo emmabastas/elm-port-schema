@@ -4,7 +4,6 @@ const { Elm } = require("./Main.elm")
 
 const schemaPath = path.resolve(process.cwd(), "./src/Schema.elm")
 const generatedElmPath = path.resolve(process.cwd(), "./src/Port.elm")
-const generatedElmModuleName = "Port"
 const generatedTsPath = path.resolve(process.cwd(), "./src/Main.d.ts")
 
 let schemaContents
@@ -19,7 +18,6 @@ try {
 let elm = Elm.Main.init({
     flags: { 
         schemaContents,
-        elmModule: generatedElmModuleName,
     }
 })
 
