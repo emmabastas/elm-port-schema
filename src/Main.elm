@@ -76,6 +76,32 @@ type alias Response =
         }
 
 
+decodeRequest : Decode.Value -> Result Error Request
+decodeRequest value =
+    let
+        decoder =
+            Decode.map Request
+                (Decode.field "schemaContents" Decode.string)
+    in
+    Decode.decodeValue decoder value
+        |> Result.mapError DecodeRequest
+
+
+encodeResponse : Response -> Encode.Value
+encodeResponse response =
+    case response of
+        Ok { generatedElm, generatedTypescript } ->
+            Encode.object
+                [ ( "generatedElm", Encode.string generatedElm )
+                , ( "generatedTypescript", Encode.string generatedTypescript )
+                ]
+
+        Err err ->
+            Encode.object
+                [ ( "errorMessage", Encode.string (errorToString err) )
+                ]
+
+
 type Error
     = DecodeRequest Decode.Error
     | ParseElm (List Parser.DeadEnd)
@@ -380,43 +406,6 @@ schemaTypeFromElmTypeAnnotation interface (Node range typeAnnotation) =
 
         Elm.Syntax.TypeAnnotation.FunctionTypeAnnotation _ _ ->
             Err [ FunctionType range ]
-
-
-decodeRequest : Decode.Value -> Result Error Request
-decodeRequest value =
-    let
-        decoder =
-            Decode.map Request
-                (Decode.field "schemaContents" Decode.string)
-    in
-    Decode.decodeValue decoder value
-        |> Result.mapError DecodeRequest
-
-
-encodeResponse : Response -> Encode.Value
-encodeResponse response =
-    let
-        status =
-            case response of
-                Ok _ ->
-                    [ ( "status", Encode.string "success" ) ]
-
-                Err _ ->
-                    [ ( "status", Encode.string "error" ) ]
-
-        data =
-            case response of
-                Ok { generatedElm, generatedTypescript } ->
-                    [ ( "generatedElm", Encode.string generatedElm )
-                    , ( "generatedTypescript", Encode.string generatedTypescript )
-                    ]
-
-                Err err ->
-                    [ ( "type", Encode.string "error" )
-                    , ( "message", Encode.string (errorToString err) )
-                    ]
-    in
-    Encode.object (status ++ data)
 
 
 errorToString : Error -> String

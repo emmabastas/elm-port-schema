@@ -22,9 +22,9 @@ let elm = Elm.Main.init({
 })
 
 elm.ports.done.subscribe(function(response: any) {
-    if (response.status == 'error') {
-        console.log(response.message)
-        process.exit(1)
+    if (typeof response.errorMessage !== "undefined") {
+      console.log(response.errorMessage)
+      process.exit(1)
     }
 
     try {
