@@ -2,8 +2,9 @@ port module Main exposing
     ( BadDeclarationError(..)
     , Error(..)
     , SchemaFromElmError(..)
-    , errorToString
     , main
+    , makeErrorMessage
+    , offendingCodeSnippet
     , schemaFromElm
     )
 
@@ -98,7 +99,7 @@ encodeResponse response =
 
         Err err ->
             Encode.object
-                [ ( "errorMessage", Encode.string (errorToString err) )
+                [ ( "errorMessage", Encode.string (makeErrorMessage err) )
                 ]
 
 
@@ -408,60 +409,181 @@ schemaTypeFromElmTypeAnnotation interface (Node range typeAnnotation) =
             Err [ FunctionType range ]
 
 
-errorToString : Error -> String
-errorToString err =
+makeErrorMessage : Error -> String
+makeErrorMessage err =
     case err of
         DecodeRequest decodeError ->
-            """---Unknown Error!---
-Well this is embarasing. Something has gone wrong but i don't know why.. This is probably a bug. Full error message:
-{{ error }}"""
+            genericErrorMessage
+                { title = "Unknown error"
+                , reason =
+                    """Well this is embarasing, Something has gone wrong and i dont know why.. This is probalby a bug. Full error message:
+
+{{ error }}}"""
+                        |> namedValue "error" (Decode.errorToString decodeError)
+                , offendingCode = Nothing
+                }
                 |> namedValue "error" (Decode.errorToString decodeError)
 
-        ParseElm deadEnds ->
-            """---Parse schema error!---
-Im got stuck parsing your schema. unfortunatley im not sophisticated enough to produce i nice error message, but here is my best atempt:
-{{ error }}"""
-                |> namedValue "error" (Parser.deadEndsToString deadEnds)
+        ParseElm _ ->
+            genericErrorMessage
+                { title = "Syntax error"
+                , reason = "I think there's a syntax error in your schema. Try and run `elm make src/Schema.elm`. That might be able to tell you what the problem is."
+                , offendingCode = Nothing
+                }
 
-        SchemaFromElm _ (NotCorrectModuleName _) ->
-            """---Error: module must be named schema!---
-Your schema must be named "Schema", it is currently named something else"""
+        SchemaFromElm code (NotCorrectModuleName range) ->
+            genericErrorMessage
+                { title = "Invalid module name"
+                , reason = "A schema module must be named `Schema`."
+                , offendingCode =
+                    Just
+                        { code = code
+                        , errorLocation = range
+                        , fix = "Rename the module to `Schema`."
+                        }
+                }
 
-        SchemaFromElm _ (IsPortModule _) ->
-            """---Error: schema is port module!---
-your schema is as a port module, i will automatically generate ports for you so there is no need to place any in your scmema. The first line of your schema should be this: "module Schema expoisng (..)\""""
+        SchemaFromElm code (IsPortModule range) ->
+            genericErrorMessage
+                { title = "Schema is a port module"
+                , reason = "Your schema is declared as a port module."
+                , offendingCode =
+                    Just
+                        { code = code
+                        , errorLocation = range
+                        , fix = "elm-port-schema will generate ports for you in src/Port.elm. There is no need to define your own here. Remove the `port` part from your module declaration."
+                        }
+                }
 
         SchemaFromElm _ (IsEffectModule _) ->
-            """---Error: schema is effect module!---
-Hey you! Stop that!"""
+            genericErrorMessage
+                { title = "Schema is effect module"
+                , reason = "Hey, you! Stop that!"
+                , offendingCode = Nothing
+                }
 
-        SchemaFromElm _ (DoesNotExposeAll _) ->
-            """---Error: module does not expose all---
-Maybe this is a bit strict on my part but you should expose everyting in your schema, i.e. the first line of your schema should be "module Schema exposing(..)\""""
+        SchemaFromElm code (DoesNotExposeAll range) ->
+            genericErrorMessage
+                { title = "Schema does not expose all"
+                , reason = "Your schema needs to expose everything using `(..)`."
+                , offendingCode =
+                    Just
+                        { code = code
+                        , errorLocation = range
+                        , fix = "Replace the exposing statement with `(..)`."
+                        }
+                }
 
-        SchemaFromElm _ (ContainsImports _) ->
-            """---Error: contains imports---
-Your module contains import. Unfortunately i can't handle this (but maybe in the future??). You will have to remove all imports."""
+        SchemaFromElm code (ContainsImports ranges) ->
+            genericErrorMessage
+                { title = "Schema has imports"
+                , reason = "Your schema imports things. That is not allowed!"
+                , offendingCode =
+                    Just
+                        { code = code
+                        , errorLocation = Range.combine ranges
+                        , fix = """I can't deal with imports. It is better if all the types that can pass through ports live in the schema.
 
-        SchemaFromElm _ (BadDeclarations _) ->
-            """---Error: bad declarations---
-You have used some declarations in your schema that i don't know how to deal with. You can't have anything that:
-is a value. E.g "myValue = 1"
-is a function. E.g "myFunction n = n + 1
-has type variables in them. E.g type MyParametricType a = Foo a
+If there are types in another module in your project that you want to use here you could move them into the schema insted, and the import them from src/Port.elm
 
-The only types you are alowed to reference are those defined by you in your schema and thes ones: (), Bool, Int, Float, Char, String, List, Maybe and Result.
-"""
+If you want to use types from another package then you're out of luck :/. You could try to copy the types into the schema insted."""
+                        }
+                }
+
+        SchemaFromElm code (BadDeclarations errors) ->
+            List.map
+                (\badDeclarationError ->
+                    case badDeclarationError of
+                        DeclarationIsValue range ->
+                            genericErrorMessage
+                                { title = "Declaration is a value/function"
+                                , reason = "Only type aliases and custom types are allowed in a schema."
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = "Remove this declaration."
+                                        }
+                                }
+
+                        TypeHasVariable range ->
+                            genericErrorMessage
+                                { title = "Type has a type variable"
+                                , reason = "Types with type variables can't be declared in a schema."
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = "I wouldn't know how to create encoders and decoders for a type with type variables. Replace the this type with something without type variables."
+                                        }
+                                }
+
+                        DeclarationIsExstensibleRecord range ->
+                            genericErrorMessage
+                                { title = "Type is an exstensible record"
+                                , reason = "Exstensible records can't be declared in a schema."
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = "I wouldn't know how to create encoders and decoders for an exstensible record. Replace this type with a normal record."
+                                        }
+                                }
+
+                        FunctionType range ->
+                            genericErrorMessage
+                                { title = "Type contains function"
+                                , reason = "Types on the form `(a -> b)` can't be declared in a schema."
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = "I wouldn't know how to create encoders and decoders for a function. To convert an elm function to a javascript one is simply not a good idea. You'll have to do it another way."
+                                        }
+                                }
+
+                        InvalidReference range ->
+                            genericErrorMessage
+                                { title = "Invalid reference"
+                                , reason = "You are trying to reference a type that i can't find."
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = "Make sure there are no typos. Running `elm make src/Schema.elm` might give usefull help."
+                                        }
+                                }
+
+                        InvalidTuple range ->
+                            genericErrorMessage
+                                { title = "Bad tuple"
+                                , reason = "I only accept tuples with two or three items. This has to many:"
+                                , offendingCode =
+                                    Just
+                                        { code = code
+                                        , errorLocation = range
+                                        , fix = """I recommend switching to records. Each item will be named, and you can use `pont.x` syntax to access them.
+
+Note: Read <https://github.com/elm/compiler/blob/master/hints/tuples.md> for more comprehensive advice on working with large chunkds of data in Elm."""
+                                        }
+                                }
+                )
+                errors
+                |> String.join "\n\n\n"
 
         SchemaFromElm _ MissingFromElmMessageDeclaration ->
-            """---Error: missing FromElmMessage---
-I can't find a FromElmMessage type in your schema, maybe you misspelled it?
-I always need a FromElmMessage type to be declared even if you wont use it. In that case just declare it as "type alias FromElmMessage = ()\""""
+            genericErrorMessage
+                { title = "Missing FromElmMessage"
+                , reason = """I can't find a FromElmMessage type in your schema, maybe you misspelled it? I always need a FromElmMessage type to be declared even if you wont use it. In that case just declare it as `type alias FromElmMessage = ()`"""
+                , offendingCode = Nothing
+                }
 
         SchemaFromElm _ MissingToElmMessageDeclaration ->
-            """---Error: missing ToElmMessage---
-I can't find a ToElmMessage type in your schema, maybe you misspelled it?
-I always need a ToElmMessage type to be declared even if you wont use it. In that case just declare it as "type alias ToElmMessage = ()\""""
+            genericErrorMessage
+                { title = "Missing ToElmMessage"
+                , reason = """I can't find a ToElmMessage type in your schema, maybe you misspelled it? I always need a ToElmMessage type to be declared even if you wont use it. In that case just declare it as `type alias ToElmMessage = ()`"""
+                , offendingCode = Nothing
+                }
 
 
 genericErrorMessage :
