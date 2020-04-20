@@ -246,39 +246,55 @@ schemaDeclarationFromElmDeclaration :
     -> Result (List BadDeclarationError) Schema.Declaration
 schemaDeclarationFromElmDeclaration interface elmDeclaration =
     case Node.value elmDeclaration of
-        Elm.Syntax.Declaration.AliasDeclaration { name, typeAnnotation } ->
-            schemaTypeFromElmTypeAnnotation interface typeAnnotation
-                |> Result.map
-                    (\schemaType ->
-                        Schema.TypeAliasDeclaration
-                            { name = Node.value name
-                            , definition = schemaType
-                            }
+        Elm.Syntax.Declaration.AliasDeclaration { name, typeAnnotation, generics } ->
+            if List.length generics /= 0 then
+                (Err << List.singleton << TypeHasVariable)
+                    (generics
+                        |> List.map Node.range
+                        |> Range.combine
                     )
 
+            else
+                schemaTypeFromElmTypeAnnotation interface typeAnnotation
+                    |> Result.map
+                        (\schemaType ->
+                            Schema.TypeAliasDeclaration
+                                { name = Node.value name
+                                , definition = schemaType
+                                }
+                        )
+
         Elm.Syntax.Declaration.CustomTypeDeclaration customType ->
-            customType.constructors
-                |> List.map
-                    (\(Node _ { name, arguments }) ->
-                        List.map
-                            (schemaTypeFromElmTypeAnnotation interface)
-                            arguments
-                            |> Result.Extra.combine
-                            |> Result.map
-                                (\schemaArguments ->
-                                    { name = Node.value name
-                                    , arguments = schemaArguments
-                                    }
-                                )
+            if List.length customType.generics /= 0 then
+                (Err << List.singleton << TypeHasVariable)
+                    (customType.generics
+                        |> List.map Node.range
+                        |> Range.combine
                     )
-                |> Result.Extra.combine
-                |> Result.map
-                    (\schemaConstructors ->
-                        Schema.CustomTypeDeclaration
-                            { name = Node.value customType.name
-                            , constructors = schemaConstructors
-                            }
-                    )
+
+            else
+                customType.constructors
+                    |> List.map
+                        (\(Node _ { name, arguments }) ->
+                            List.map
+                                (schemaTypeFromElmTypeAnnotation interface)
+                                arguments
+                                |> Result.Extra.combine
+                                |> Result.map
+                                    (\schemaArguments ->
+                                        { name = Node.value name
+                                        , arguments = schemaArguments
+                                        }
+                                    )
+                        )
+                    |> Result.Extra.combine
+                    |> Result.map
+                        (\schemaConstructors ->
+                            Schema.CustomTypeDeclaration
+                                { name = Node.value customType.name
+                                , constructors = schemaConstructors
+                                }
+                        )
 
         _ ->
             Err [ DeclarationIsValue (Node.range elmDeclaration) ]
