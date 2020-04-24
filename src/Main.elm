@@ -248,11 +248,16 @@ schemaDeclarationFromElmDeclaration interface elmDeclaration =
     case Node.value elmDeclaration of
         Elm.Syntax.Declaration.AliasDeclaration { name, typeAnnotation, generics } ->
             if List.length generics /= 0 then
-                (Err << List.singleton << TypeHasVariable)
-                    (generics
-                        |> List.map Node.range
-                        |> Range.combine
-                    )
+                case schemaTypeFromElmTypeAnnotation interface typeAnnotation of
+                    Err [ DeclarationIsExstensibleRecord range ] ->
+                        Err [ DeclarationIsExstensibleRecord range ]
+
+                    _ ->
+                        (Err << List.singleton << TypeHasVariable)
+                            (generics
+                                |> List.map Node.range
+                                |> Range.combine
+                            )
 
             else
                 schemaTypeFromElmTypeAnnotation interface typeAnnotation
@@ -419,7 +424,7 @@ schemaTypeFromElmTypeAnnotation interface (Node range typeAnnotation) =
                 |> Result.map Schema.Record
 
         Elm.Syntax.TypeAnnotation.GenericRecord _ _ ->
-            Err [ TypeHasVariable range ]
+            Err [ DeclarationIsExstensibleRecord range ]
 
         Elm.Syntax.TypeAnnotation.FunctionTypeAnnotation _ _ ->
             Err [ FunctionType range ]
