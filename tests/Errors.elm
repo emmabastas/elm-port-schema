@@ -195,6 +195,11 @@ type alias ToElmMessage = ()"""
             Expect.equal (parseSchema input) expectedOutput
 
 
+withExstensibleRecord : Test
+withExstensibleRecord =
+    Test.todo "Exstensible records should not be allowed"
+
+
 onlyTypes : Test
 onlyTypes =
     test "Only type declaration should be allowed" <|
@@ -236,3 +241,8 @@ type alias ToElmMessage = ()"""
                         ]
             in
             Expect.equal (parseSchema input) expectedOutput
+
+
+recursiveTypeAlias : Test
+recursiveTypeAlias =
+    Test.todo "Recursive type alias should not be allowed"
