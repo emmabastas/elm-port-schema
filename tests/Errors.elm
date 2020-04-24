@@ -197,7 +197,22 @@ type alias ToElmMessage = ()"""
 
 withExstensibleRecord : Test
 withExstensibleRecord =
-    Test.todo "Exstensible records should not be allowed"
+    test "Exstensible records should not be allowed" <|
+        \_ ->
+            let
+                input =
+                    """module Schema exposing (..)
+type alias Foo a = { a | foo : a }
+type alias FromElmMessage = ()
+type alias ToElmMessage = ()"""
+
+                expectedOutput =
+                    (Err << Main.SchemaFromElm input << Main.BadDeclarations)
+                        [ Main.DeclarationIsExstensibleRecord
+                            (Range (Location 2 20) (Location 2 35))
+                        ]
+            in
+            Expect.equal (parseSchema input) expectedOutput
 
 
 onlyTypes : Test
@@ -241,8 +256,3 @@ type alias ToElmMessage = ()"""
                         ]
             in
             Expect.equal (parseSchema input) expectedOutput
-
-
-recursiveTypeAlias : Test
-recursiveTypeAlias =
-    Test.todo "Recursive type alias should not be allowed"
