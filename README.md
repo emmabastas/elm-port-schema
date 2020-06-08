@@ -5,7 +5,7 @@ bugs to be discovered!
 # elm-port-schema
 
 Bring type-safety to the interface between js and elm!
-Automatially generate decoders/encoders and typescript definitions from your
+Automatically generate decoders/encoders and typescript definitions from your
 elm types.
 
 
@@ -14,11 +14,11 @@ elm types.
 
 Elm is great! But not everything can be done in pure elm.
 Sometimes we need to pass over into js-land and to do that we have ports.
-If our elm app happends to be very port-heavy for whatever reason,
+If our Elm app happens to be very port-heavy for whatever reason,
 we might find ourselved spending increasing amounts of time writing json
 decoders/encoders, syncing that with the js-side and debugging whenever
 a typo or something small like that slipps through. Elm and typescript helps
-us write code with fewer errors, lets bring them to the interface between elm and js!
+us write code with fewer errors, lets bring them to the interface between Elm and js!
 
 
 
@@ -30,10 +30,10 @@ us write code with fewer errors, lets bring them to the interface between elm an
 ## How it works
 
 __NOTE__: We will use typescript instead of javascript. Typescript is essentially javascript
-with types, which is exacly what wen need.
+with types, which is exacly what we need.
 
 Everything revolves around a _schema_ located at `src/Schema.elm`
-and the two types that need to be in it: `FromElmMessage` and `ToElmMessage`.
+and the two types that needs to be in it: `FromElmMessage` and `ToElmMessage`.
 if your schema looks like this:
 ```elm
 module Schema exposing (..)
@@ -45,7 +45,7 @@ type ToElmMessage = ...
 and you run `elm-port-schema` it will generate two files.<br/><br/>
 
 1. `src/Port.elm`.
-You can import this module from the rest of your elm to send and recive messages.
+You can import this module from the rest of your Elm to send and recive messages.
 It looks a bit like this:
 ```elm
 port module Port exposing (..)
@@ -65,7 +65,7 @@ recive = ...
 <br/>
 
 2. `src/Main.d.ts`.
-This file makes typescript aware of what data can be sent to and from elm.<br/>
+This file makes typescript aware of what data can be sent to and from Elm.<br/>
 It look a little like this:
 ```typescript
 export let Elm: { Main: { init: (flags?: any) => ElmApp } }
@@ -107,14 +107,14 @@ to get up and runing with `elm-port-schema`.
 
 ## Important notes / Words of caution
 Before using this tool, know that it __WILL__ add complexity to your project.
-compared to plain js and elm you will need `typescript`, a bundler like `webpack`
-with a `typescript` and `elm` loader. If you're only goin to spend a couple hours
-interfacing js and elm this additional complexity might not be worth it.
+compared to plain js and Elm you will need _typescript_, a bundler like _webpack_
+with a _typescript_ and _Elm_ loader. If you're only goin to spend a couple hours
+interfacing js and Elm this additional complexity might not be worth it.
 [This comic](https://www.xkcd.com/974/) commes to mind.
 
 
 Also note that `elm-port-schema` is __NOT__ intended for data interchange
-between client and server. Thats a a different problem and something like
+between client and server. Thats a different problem and something like
 [elm-graphql](https://github.com/dillonkearns/elm-graphql/) would be more appropriate
 to solve it.<br/>
 Also read this [vission for data interchange in elm](https://gist.github.com/evancz/1c5f2cf34939336ecb79b97bb89d9da6). I found it to be very enlightening!
